@@ -6,67 +6,87 @@
 // a history.back() or .forward()
 // Settings are handled by the background script bg.js.
 
-(async () => {
-  // define a motion accumulator
-  let counter = 0;
+async function main() {
+  let lastContainer = null;
+  let lastContainerPosition = 0;
+  const containerMoved = element => {
+    const scroller = getScrollableParent(element);
+    const toReturn = (lastContainer === scroller) && (lastContainerPosition !== scroller.scrollLeft);
 
-  // define a variable to store the reset after timeout function
-  let timeout;
+    lastContainer = scroller;
+    lastContainerPosition = scroller.scrollLeft;
+    return toReturn;
+  };
 
-  // get settings  
-  let settings = await browser.runtime.sendMessage({ cmd: 'getSettings' });
-  
-  // create a visual feedback element to show the accumulator status
-  let feedback = document.createElement('DIV');
-  feedback.style.position = 'fixed';
-  feedback.style.bottom = '0';
-  feedback.style.left = '0';
-  feedback.style.opacity = '0';
-  feedback.style.width = '100%';
-  feedback.style.height = `${settings.feedbackSize || 5}px`;
-  feedback.style.backgroundColor = settings.feedbackColor || '#888888';
-  feedback.style.transition = 'left 0.1s linear, opacity 0.5s';
-  feedback.style.zIndex = 2147483647;
-  feedback.innerHTML = '&nbsp;';
-  document.body.appendChild(feedback);
+  let acc = 0;
+  let dir = 0;
+  let timeout = null;
+  window.addEventListener('wheel', async e => {
+    if (e.deltaY || !e.deltaX) {
+      acc = -100;
+      return;
+    };
 
-  // execute each time a page is scrolled
-  document.addEventListener('wheel', async e => {
-    // do nothing if scroll event is vertical
-    if (!e.deltaX) return;
+    if (containerMoved(e.target)) {
+      acc = -100;
+      return;
+    }
 
-    // set the opacity to 100%
-    feedback.style.opacity = 1;
-    
-    // get settings again (this code doesn't seem to hurt performances and
-    // it allows to apply the latest settings without needing to reload the
-    // current page)
-    settings = await browser.runtime.sendMessage({ cmd: 'getSettings' });
-  
-    // cancel the reset timeout
+    acc += Math.abs(e.deltaX);
+    const thisDir = Math.sign(e.deltaX);
+    if (dir != thisDir) {
+      acc = 0;
+      setTransform(0, true)
+      dir = thisDir;
+    }
+
     clearTimeout(timeout);
+    timeout = setTimeout(() => {
+      acc = 0
+      setTransform(0, true)
+    }, 250);
 
-    // accumulates the motion from this event
-    counter += e.deltaX;
+    let thresholdMove = 100;
 
-    // move the feedback div to show the accumulator status
-    feedback.style.left = Math.floor((counter / (50 - settings.threshold)) * 100) + '%';
+    if (acc >= thresholdMove) {
+      setTransform((acc - thresholdMove) / (window.innerWidth - thresholdMove) * 100 * -dir)
+    }
 
-    // if the total motion is greather than threshold
-    if (Math.abs(counter) >= (50 - settings.threshold)) {
-      // move the feedback div out of the way
-      feedback.style.display = 'none';
-      setTimeout(() => feedback.style.display = 'initial', settings.timeout + 400);
-
-      // navigate back/forward in history
-      if (counter > 0) { 
-        setTimeout(window.history.forward(), 200);
+    if (acc >= window.innerWidth * 0.75) {
+      if (dir > 0) {
+        window.history.forward()
       } else {
-        setTimeout(window.history.back(), 200);
+        window.history.back()
       }
     }
-    
-    // in any case, reset the motion accumulator and the feedback after a timeout
-    timeout = setTimeout(() => feedback.style.opacity = feedback.style.left = counter = 0, settings.timeout);
   });
-})();
+}
+
+main();
+
+
+function setTransform(value, slow = false) {
+  if (slow) {
+    document.documentElement.style.transition = 'transform 0.5s'
+  } else {
+    document.documentElement.style.transition = ''
+  }
+  document.documentElement.style.transform = `translateX(${value}%)`
+  document.documentElement.style.overflowX = 'hidden';
+}
+
+function isScrollable(element) {
+  const hasScrollableContent = element.scrollWidth > element.clientWidth;
+
+  const overflowX = window.getComputedStyle(element).overflowX;
+  const isScrollable = overflowX !== 'visible' && overflowX !== 'hidden';
+
+  return hasScrollableContent && isScrollable && element.clientHeight !== 0;
+};
+function getScrollableParent(element) {
+  if (!element || element === document.documentElement || isScrollable(element)) {
+    return element;
+  } else {
+    return getScrollableParent(element.parentNode);
+  }
+};
